@@ -1,0 +1,2 @@
+# danmaku
+kook danmaku plugin
