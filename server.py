@@ -116,21 +116,19 @@ class GatewayServer:
                 ev_user_id = str(data.get("user_id", ""))
                 my_ch = self.client_channels.get(client_id, "")
                 my_user_id = self.client_users.get(client_id, "")
-                is_track_own = self.client_track_own.get(client_id, False)
-                log.info(f"[FILTER {event_type}] cid={client_id} my_user={my_user_id} ev_user={ev_user_id} my_ch={my_ch} ev_ch={ev_ch} track_own={is_track_own}")
+                log.info(f"[FILTER {event_type}] cid={client_id} my_user={my_user_id} ev_user={ev_user_id} my_ch={my_ch} ev_ch={ev_ch}")
 
                 if ev_user_id and my_user_id and ev_user_id == my_user_id:
                     log.info(f"  → BLOCKED: 自己的事件")
                     return
 
-                if my_ch:
-                    if ev_ch and ev_ch != my_ch:
-                        log.info(f"  → BLOCKED: 频道不匹配")
-                        return
-                else:
-                    if not is_track_own:
-                        log.info(f"  → BLOCKED: 无频道+非track_own")
-                        return
+                if not my_ch:
+                    log.info(f"  → BLOCKED: 还没锁定频道")
+                    return
+
+                if ev_ch and ev_ch != my_ch:
+                    log.info(f"  → BLOCKED: 频道不匹配")
+                    return
 
             log.info(f"  → PASS -> 发给 client {client_id}")
             await ws.send(json.dumps(event_dict, ensure_ascii=False, default=str))
