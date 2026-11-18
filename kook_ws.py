@@ -872,8 +872,8 @@ class KookGateway:
         )
         type_label = self.TYPE_LABELS.get(event_type, "未知")
 
-        if event_type in (1, 9):
-            content = event.get("content", "")
+        if event_type == 9:
+            content = event.get("extra", {}).get("kmarkdown", {}).get("raw_content", "")
             if not content:
                 return
             content = re.sub(r'\\(.)', r'\1', content)

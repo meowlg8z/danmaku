@@ -107,9 +107,7 @@ class GatewayServer:
                         else:
                             self.client_channels[cid] = ev_ch
                 my_user_id = self.client_users.get(client_id, "")
-                log.info(f"[FILTER track] cid={client_id} my_user={my_user_id} ev_user={ev_user_id} ev_ch={ev_ch} my_channels={self.client_channels}")
                 if ev_user_id and my_user_id and ev_user_id != my_user_id:
-                    log.info(f"  → BLOCKED: user_id 不匹配")
                     return
 
             elif event_type in ("voice", "message"):
@@ -117,21 +115,16 @@ class GatewayServer:
                 ev_user_id = str(data.get("user_id", ""))
                 my_ch = self.client_channels.get(client_id, "")
                 my_user_id = self.client_users.get(client_id, "")
-                log.info(f"[FILTER {event_type}] cid={client_id} my_user={my_user_id} ev_user={ev_user_id} my_ch={my_ch} ev_ch={ev_ch}")
 
                 if ev_user_id and my_user_id and ev_user_id == my_user_id:
-                    log.info(f"  → BLOCKED: 自己的事件")
                     return
 
                 if not my_ch:
-                    log.info(f"  → BLOCKED: 还没锁定频道")
                     return
 
                 if ev_ch and ev_ch != my_ch:
-                    log.info(f"  → BLOCKED: 频道不匹配")
                     return
 
-            log.info(f"  → PASS -> 发给 client {client_id}")
             await ws.send(json.dumps(event_dict, ensure_ascii=False, default=str))
         except Exception as e:
             log.warning(f"_push_to_client 异常: {e}")
@@ -240,6 +233,9 @@ class GatewayServer:
 
         if upgrade_val and b"websocket" in str(upgrade_val).lower().encode():
             return None
+
+        remote = getattr(request, "remote", None) or getattr(connection, "remote_address", "unknown")
+        log.info(f"[HEALTH] ping from {remote}")
 
         body = b'{"status":"ok","service":"kook-gateway"}'
         resp_headers = Headers([
