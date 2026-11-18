@@ -729,7 +729,7 @@ class KookGateway:
         action_label = "来了" if extra_type == "joined_channel" else "走了"
         action_enum = "joined" if extra_type == "joined_channel" else "exited"
 
-        # ── 1) 某个注册用户加入/退出 → 只切该用户的路由 ───────────
+        # ── 1) 某个注册用户加入/退出 → 先切该用户自己的路由 + 广播 track ─
         is_self = user_id in self._registered_user_ids
         if is_self:
             routes = self._user_routes.get(str(user_id), [])
@@ -753,7 +753,6 @@ class KookGateway:
                     }))
                 elif extra_type in ("exited_channel", "left_channel"):
                     log.info(f"🔓 用户 {user_id} 退出频道")
-                    # 遍历同 user_id 下所有 route，本地回调 + 清理
                     for route in routes:
                         if route.track_change_callback:
                             try:
@@ -781,9 +780,9 @@ class KookGateway:
                                  "action": "exited", "guild_id": guild_id,
                                  "user_id": user_id},
                     }))
-                return
 
-        # ── 2) 他人事件 → 本地派发 + 远程广播 ────────────────────
+        # ── 2) 无论是不是自己的事件 → 都要派发 voice 事件给该频道所有观察者 ─
+        # （自己的路由在 step 1 已经切好加入了 _routes[channel_id]，所以这里也包含给自己派发）
         routes = self._routes.get(channel_id, [])
         log.info(
             f"🔔 voice事件: channel_id='{channel_id}' user_id='{user_id}' "
@@ -795,7 +794,7 @@ class KookGateway:
         msg = f"{nickname} {action_label}"
         log.info(msg)
 
-        # 本地派发（只有 _routes 里有该频道的 route 才做）
+        # 本地派发
         for route in routes:
             if route.q:
                 route.q.put(msg)
