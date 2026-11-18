@@ -49,6 +49,8 @@ class GatewayServer:
         self.client_users: dict[str, str] = {}
         # client_id -> 当前监听的 channel_id（按此过滤 voice/message 事件）
         self.client_channels: dict[str, str] = {}
+        # client_id -> track_own_join 标志
+        self.client_track_own: dict[str, bool] = {}
 
         self._shutdown = asyncio.Event()
 
@@ -79,7 +81,8 @@ class GatewayServer:
             unsubscribe()
             self.clients.pop(client_id, None)
             self.client_users.pop(client_id, None)
-            # 通知 Gateway 清理该 Client 的所有路由
+            self.client_channels.pop(client_id, None)
+            self.client_track_own.pop(client_id, None)
             self.gw.on_client_disconnect(client_id)
             log.info(f"Client 断开: {client_id} (剩 {len(self.clients)} 个)")
 
@@ -112,10 +115,14 @@ class GatewayServer:
             elif event_type in ("voice", "message"):
                 ev_ch = str(data.get("channel_id", ""))
                 my_ch = self.client_channels.get(client_id, "")
-                if not my_ch:
-                    return
-                if ev_ch and ev_ch != my_ch:
-                    return
+                is_track_own = self.client_track_own.get(client_id, False)
+
+                if my_ch:
+                    if ev_ch and ev_ch != my_ch:
+                        return
+                else:
+                    if not is_track_own:
+                        return
 
             await ws.send(json.dumps(event_dict, ensure_ascii=False, default=str))
         except Exception:
@@ -144,11 +151,13 @@ class GatewayServer:
                 if user_id:
                     self.client_users[client_id] = user_id
 
+                is_track_own = bool(args.get("track_own_join", False))
+                self.client_track_own[client_id] = is_track_own
+
                 ch_id = str(args.get("channel_id", ""))
                 if ch_id:
                     self.client_channels[client_id] = ch_id
-                elif args.get("track_own_join"):
-                    # track_own_join 模式下初始 channel_id 可能为空，等事件触发后更新
+                elif is_track_own:
                     self.client_channels.pop(client_id, None)
 
                 self.gw.register_channel(
@@ -187,6 +196,7 @@ class GatewayServer:
                 self.gw.unregister_channel(client_id=client_id, _internal=True)
                 self.client_users.pop(client_id, None)
                 self.client_channels.pop(client_id, None)
+                self.client_track_own.pop(client_id, None)
                 reply(data={"status": "unregistered"})
 
             elif cmd_type == "get_current_route":
