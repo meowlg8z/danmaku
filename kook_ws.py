@@ -530,21 +530,41 @@ class KookGateway:
             return self._user_cache[cache_key]
 
         def _do():
-            try:
-                import requests
-                if guild_id:
+            import requests
+            headers = {"Authorization": f"Bot {self.token}"}
+            if guild_id:
+                try:
                     r = requests.get(
-                        "https://www.kookapp.cn/api/v3/user/view",
-                        headers={"Authorization": f"Bot {self.token}"},
-                        params={"guild_id": guild_id, "user_id": user_id},
+                        "https://www.kookapp.cn/api/v3/guild/user-list",
+                        headers=headers,
+                        params={
+                            "guild_id": guild_id,
+                            "filter_user_id": user_id,
+                            "page_size": 50,
+                        },
                         timeout=5,
                     )
                     data = r.json()
                     if data.get("code") == 0:
-                        user = data.get("data", {})
-                        return user.get("nickname") or user.get("username") or None
+                        items = data.get("data", {}).get("items", [])
+                        if items:
+                            u = items[0]
+                            return u.get("nickname") or u.get("username") or None
+                except Exception as e:
+                    log.warning(f"guild/user-list 异常 user={user_id}: {e}")
+            try:
+                r = requests.get(
+                    "https://www.kookapp.cn/api/v3/user/view",
+                    headers=headers,
+                    params={"user_id": user_id},
+                    timeout=5,
+                )
+                data = r.json()
+                if data.get("code") == 0:
+                    user = data.get("data", {})
+                    return user.get("username") or None
             except Exception as e:
-                log.warning(f"获取用户信息异常 user_id={user_id}: {e}")
+                log.warning(f"user/view 异常 user={user_id}: {e}")
             return None
 
         loop = asyncio.get_running_loop()
@@ -713,7 +733,7 @@ class KookGateway:
         extra = event.get("extra", {})
         extra_type = extra.get("type", "")
         body = extra.get("body", {})
-        log.info(f"▶ [voice入口] extra_type='{extra_type}' body_keys={list(body.keys())} target_id={event.get('target_id')}")
+        log.info(f"▶ [voice入口] extra_type='{extra_type}' body={json.dumps(body, ensure_ascii=False)[:300]} event_keys={list(event.keys())}")
 
         channel_id = str(body.get("channel_id", ""))
         user_id = str(body.get("user_id", ""))
