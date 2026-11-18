@@ -776,7 +776,7 @@ class KookGateway:
                                 self._routes.pop(old_ch, None)
                     asyncio.create_task(self._broadcast_event({
                         "type": "event", "event_type": "track",
-                        "data": {"channel_id": channel_id, "channel_name": "",
+                        "data": {"channel_id": "", "channel_name": "",
                                  "action": "exited", "guild_id": guild_id,
                                  "user_id": user_id},
                     }))

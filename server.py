@@ -99,12 +99,13 @@ class GatewayServer:
             if event_type == "track":
                 ev_user_id = str(data.get("user_id", ""))
                 ev_ch = str(data.get("channel_id", ""))
+                action = str(data.get("action", ""))
                 for cid, uid in self.client_users.items():
                     if uid == ev_user_id:
-                        if ev_ch:
-                            self.client_channels[cid] = ev_ch
-                        else:
+                        if action in ("exited", "left") or not ev_ch:
                             self.client_channels.pop(cid, None)
+                        else:
+                            self.client_channels[cid] = ev_ch
                 my_user_id = self.client_users.get(client_id, "")
                 log.info(f"[FILTER track] cid={client_id} my_user={my_user_id} ev_user={ev_user_id} ev_ch={ev_ch} my_channels={self.client_channels}")
                 if ev_user_id and my_user_id and ev_user_id != my_user_id:
