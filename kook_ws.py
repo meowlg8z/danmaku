@@ -524,13 +524,27 @@ class KookGateway:
     # ------------------------------------------------------------------
     # 用户查询
     # ------------------------------------------------------------------
-    async def _fetch_user_nickname(self, user_id):
-        if user_id in self._user_cache:
-            return self._user_cache[user_id]
+    async def _fetch_user_nickname(self, user_id, guild_id=None):
+        cache_key = f"{guild_id}:{user_id}" if guild_id else user_id
+        if cache_key in self._user_cache:
+            return self._user_cache[cache_key]
 
         def _do():
             try:
                 import requests
+                if guild_id:
+                    r = requests.get(
+                        "https://www.kookapp.cn/api/v3/guild/user-profile",
+                        headers={"Authorization": f"Bot {self.token}"},
+                        params={"guild_id": guild_id, "user_id": user_id},
+                        timeout=5,
+                    )
+                    data = r.json()
+                    if data.get("code") == 0:
+                        profile = data.get("data", {})
+                        nick = profile.get("nickname") or ""
+                        if nick:
+                            return nick
                 r = requests.get(
                     "https://www.kookapp.cn/api/v3/user/view",
                     headers={"Authorization": f"Bot {self.token}"},
@@ -548,9 +562,9 @@ class KookGateway:
         loop = asyncio.get_running_loop()
         nickname = await loop.run_in_executor(None, _do)
         if nickname:
-            self._user_cache[user_id] = nickname
+            self._user_cache[cache_key] = nickname
             return nickname
-        self._user_cache[user_id] = user_id
+        self._user_cache[cache_key] = user_id
         return user_id
 
     # ------------------------------------------------------------------
@@ -790,7 +804,7 @@ class KookGateway:
             f"_routes.keys={list(self._routes.keys())} routes_count={len(routes)}"
         )
 
-        nickname = await self._fetch_user_nickname(user_id)
+        nickname = await self._fetch_user_nickname(user_id, guild_id)
         msg = f"{nickname} {action_label}"
         log.info(msg)
 
