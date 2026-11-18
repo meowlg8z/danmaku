@@ -207,19 +207,19 @@ class GatewayServer:
     # ------------------------------------------------------------------
     # HTTP 健康检查（供外部 cron ping 保活 Render）
     # ------------------------------------------------------------------
-    async def _process_http_request(self, path, headers):
-        """拦截非 WebSocket 升级的 HTTP 请求，返回健康检查响应"""
+    async def _process_http_request(self, connection, request):
+        """websockets 17.x process_request: (ServerConnection, Request) -> Response | None"""
+        from websockets.http11 import Response, Headers
+
+        path = getattr(request, "path", "/")
         if path in ("/healthz", "/health", "/"):
             body = b'{"status":"ok","service":"kook-gateway"}'
-            return (
-                200,
-                [
-                    (b"Content-Type", b"application/json"),
-                    (b"Content-Length", str(len(body)).encode()),
-                    (b"Access-Control-Allow-Origin", b"*"),
-                ],
-                body,
-            )
+            headers = Headers([
+                (b"Content-Type", b"application/json"),
+                (b"Content-Length", str(len(body)).encode()),
+                (b"Access-Control-Allow-Origin", b"*"),
+            ])
+            return Response(200, "OK", headers, body)
         return None
 
     # ------------------------------------------------------------------

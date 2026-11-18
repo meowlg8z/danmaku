@@ -34,7 +34,7 @@ import threading
 import aiohttp
 import websockets
 from dataclasses import dataclass, field
-from typing import Optional, Callable, Dict, Any
+from typing import Optional, Callable, Dict, Any, List
 
 from logger import get_logger
 
@@ -78,8 +78,8 @@ class KookGateway:
         # ── Server 内部状态（只允许在 Server 线程读写）────────
         # channel_id → [RouteRecord]：一个频道可以被多个 Client 同时监听
         self._routes: Dict[str, list] = {}
-        # user_id → RouteRecord：每个用户的"当前监听路由"（用于 track_own_join）
-        self._user_routes: Dict[str, RouteRecord] = {}
+        # user_id → [RouteRecord]：同一账号可有多个 Client 实例（多标签/多PC）
+        self._user_routes: Dict[str, List[RouteRecord]] = {}
         # 所有已注册 user_id 集合（判断事件是不是"自己的"）
         self._registered_user_ids: set = set()
 
@@ -195,14 +195,18 @@ class KookGateway:
             return None
         return self._submit("unregister", client_id=client_id)
 
+    def _get_first_route(self, user_id: str) -> Optional[RouteRecord]:
+        """取指定 user_id 路由列表中的第一条（通常是 track_own_join 的那条）"""
+        routes = self._user_routes.get(str(user_id), [])
+        return routes[0] if routes else None
+
     def get_current_route(self, user_id="", _internal=False):
-        """获取指定用户的当前路由。"""
+        """获取指定用户的当前路由（取列表中第一个）。"""
         if _internal:
             if user_id:
-                return self._user_routes.get(user_id)
-            # 兼容：返回所有用户路由（取第一个）
-            for r in self._user_routes.values():
-                return r
+                return self._get_first_route(user_id)
+            for uid in self._user_routes.keys():
+                return self._get_first_route(uid)
             return None
         return self._submit("get_current_route", user_id=user_id)
 
@@ -214,7 +218,7 @@ class KookGateway:
         if not client_id:
             return
         removed = 0
-        # 从路由表里移除
+        # 从频道桶里移除
         for ch_id, records in list(self._routes.items()):
             keep = [r for r in records if r.client_id != client_id]
             if keep:
@@ -222,12 +226,16 @@ class KookGateway:
             else:
                 self._routes.pop(ch_id, None)
             removed += len(records) - len(keep)
-        # 从 user_routes 里移除
-        for uid, r in list(self._user_routes.items()):
-            if r.client_id == client_id:
+        # 从 user_routes 里移除（list 里的某一条）
+        for uid in list(self._user_routes.keys()):
+            old_list = self._user_routes[uid]
+            new_list = [r for r in old_list if r.client_id != client_id]
+            if new_list:
+                self._user_routes[uid] = new_list
+            else:
                 self._user_routes.pop(uid, None)
                 self._registered_user_ids.discard(uid)
-                removed += 1
+            removed += len(old_list) - len(new_list)
         if removed:
             log.info(f"Client {client_id} 断开，清理了 {removed} 条路由")
 
@@ -329,7 +337,7 @@ class KookGateway:
                 self._do_unregister(client_id=args.get("client_id", ""))
                 holder["value"] = None
             elif cmd_type == "get_current_route":
-                holder["value"] = self._user_routes.get(args.get("user_id", ""))
+                holder["value"] = self._get_first_route(args.get("user_id", ""))
             elif cmd_type == "stop":
                 self._stop_event.set()
                 holder["value"] = None
@@ -379,13 +387,21 @@ class KookGateway:
             if not self._routes[old_ch]:
                 self._routes.pop(old_ch, None)
 
+        # 从 _user_routes 里也清掉该 client_id 的旧记录
+        if user_id and user_id in self._user_routes:
+            self._user_routes[user_id] = [
+                r for r in self._user_routes[user_id] if r.client_id != client_id
+            ]
+            if not self._user_routes[user_id]:
+                self._user_routes.pop(user_id, None)
+
         # 加入新频道的桶里
         if ch_id:
             self._routes.setdefault(ch_id, []).append(record)
 
-        # 如果带 user_id，也更新 user_routes
+        # 如果带 user_id，追加到该用户的 route list
         if user_id:
-            self._user_routes[user_id] = record
+            self._user_routes.setdefault(user_id, []).append(record)
             if record.track_own_join:
                 self._registered_user_ids.add(user_id)
 
@@ -398,7 +414,7 @@ class KookGateway:
             except RuntimeError:
                 pass
 
-        log.info(f"注册路由: ch_id='{ch_id}' track_own_join={record.track_own_join} user_id={user_id}")
+        log.info(f"注册路由: ch_id='{ch_id}' track_own_join={record.track_own_join} user_id={user_id} client_id={client_id}")
         log.info(f"  当前 _routes keys: {list(self._routes.keys())}")
         log.info(f"  当前 _user_routes keys: {list(self._user_routes.keys())}")
         log.info(f"  当前 _registered_user_ids: {list(self._registered_user_ids)}")
@@ -411,39 +427,42 @@ class KookGateway:
             guild_id="",
             guild_name="",
             user_id="",
-    ) -> Optional[RouteRecord]:
+    ) -> List[RouteRecord]:
         user_id = str(user_id) if user_id else ""
         if not user_id:
-            return None
+            return []
 
-        old = self._user_routes.get(user_id)
-        if not old:
-            return None
+        routes = self._user_routes.get(user_id, [])
+        if not routes:
+            return []
 
         new_id = str(new_channel_id)
+        switched = []
 
-        # 从旧频道桶里移除
-        if old.channel_id and old.channel_id in self._routes:
-            self._routes[old.channel_id] = [
-                r for r in self._routes[old.channel_id]
-                if not (r.user_id == user_id and r.client_id == old.client_id)
-            ]
-            if not self._routes[old.channel_id]:
-                self._routes.pop(old.channel_id, None)
+        for old in routes:
+            # 从旧频道桶里移除
+            if old.channel_id and old.channel_id in self._routes:
+                self._routes[old.channel_id] = [
+                    r for r in self._routes[old.channel_id]
+                    if r.client_id != old.client_id
+                ]
+                if not self._routes[old.channel_id]:
+                    self._routes.pop(old.channel_id, None)
 
-        # 更新 record
-        old.channel_id = new_id
-        old.channel_name = channel_name or new_id
-        old.guild_id = str(guild_id) if guild_id else ""
-        old.guild_name = guild_name or ""
+            # 更新 record
+            old.channel_id = new_id
+            old.channel_name = channel_name or new_id
+            old.guild_id = str(guild_id) if guild_id else ""
+            old.guild_name = guild_name or ""
 
-        # 加入新频道桶
-        if new_id:
-            self._routes.setdefault(new_id, []).append(old)
+            # 加入新频道桶
+            if new_id:
+                self._routes.setdefault(new_id, []).append(old)
 
-        self._user_routes[user_id] = old
-        log.info(f"切换路由 user={user_id} → {old}")
-        return old
+            switched.append(old)
+
+        log.info(f"切换路由 user={user_id} ({len(routes)} 个 client) → ch={new_id}")
+        return switched
 
     def _do_unregister(self, client_id=""):
         """注销指定 Client 的所有路由"""
@@ -542,11 +561,12 @@ class KookGateway:
             log.info("🔍 HTTP 预查询跳过：_registered_user_ids 为空")
             return
 
-        targets = [
-            (uid, self._user_routes.get(uid))
-            for uid in self._registered_user_ids
-            if self._user_routes.get(uid) and self._user_routes[uid].track_own_join
-        ]
+        targets = []
+        for uid in self._registered_user_ids:
+            for r in self._user_routes.get(uid, []):
+                if r.track_own_join:
+                    targets.append((uid, r))
+                    break
         if not targets:
             log.info("🔍 HTTP 预查询跳过：没有 track_own_join 的 route")
             return
@@ -593,22 +613,24 @@ class KookGateway:
                 )
                 log.info(f"  🔒 switch 后 _routes keys: {list(self._routes.keys())}")
 
-                # 本地回调
-                r = self._user_routes.get(uid)
-                if r and r.track_change_callback:
-                    try:
-                        r.track_change_callback(
-                            r.channel_id, r.channel_name, "joined",
-                            guild_id=r.guild_id, guild_name=r.guild_name,
-                        )
-                    except Exception as e:
-                        log.warning(f"track_change_callback 异常: {e}")
+                # 本地回调：对该 user_id 下所有 track_change_callback 都调一次
+                routes = self._user_routes.get(uid, [])
+                for r in routes:
+                    if r and r.track_change_callback:
+                        try:
+                            r.track_change_callback(
+                                r.channel_id, r.channel_name, "joined",
+                                guild_id=r.guild_id, guild_name=r.guild_name,
+                            )
+                        except Exception as e:
+                            log.warning(f"track_change_callback 异常: {e}")
                 # 广播 track 事件
+                first = self._get_first_route(uid)
                 asyncio.create_task(self._broadcast_event({
                     "type": "event", "event_type": "track",
                     "data": {
-                        "channel_id": r.channel_id if r else ch["id"],
-                        "channel_name": r.channel_name if r else ch["name"],
+                        "channel_id": first.channel_id if first else ch["id"],
+                        "channel_name": first.channel_name if first else ch["name"],
                         "action": "joined",
                         "guild_id": str(guild["id"]),
                         "guild_name": guild.get("name", ""),
@@ -625,49 +647,55 @@ class KookGateway:
             await self._fetch_channel_and_guild_names_for(uid)
 
     async def _fetch_channel_and_guild_names_for(self, user_id: str):
-        """补全指定用户路由的频道名/服务器名"""
-        r = self._user_routes.get(user_id)
-        if not r:
+        """补全指定用户所有路由的频道名/服务器名"""
+        routes = self._user_routes.get(str(user_id), [])
+        if not routes:
             return
         try:
             from kook_api import KookAPI
             api = KookAPI(self.token)
             loop = asyncio.get_running_loop()
 
-            channel_name = await loop.run_in_executor(
-                None, api.get_channel_name, r.channel_id
-            )
-            if channel_name and channel_name != r.channel_id:
-                r.channel_name = channel_name
+            first = True
+            for r in routes:
+                if not r.channel_id:
+                    continue
+                channel_name = await loop.run_in_executor(
+                    None, api.get_channel_name, r.channel_id
+                )
+                if channel_name and channel_name != r.channel_id:
+                    r.channel_name = channel_name
 
-            if not r.guild_name and r.guild_id:
-                guilds = await loop.run_in_executor(None, api.get_guilds)
-                for g in guilds:
-                    if str(g["id"]) == r.guild_id:
-                        r.guild_name = g.get("name", "")
-                        break
+                if not r.guild_name and r.guild_id:
+                    guilds = await loop.run_in_executor(None, api.get_guilds)
+                    for g in guilds:
+                        if str(g["id"]) == r.guild_id:
+                            r.guild_name = g.get("name", "")
+                            break
 
-            if channel_name and channel_name != r.channel_id:
-                log.info(f"✅ 频道名称补全 user={user_id}: {channel_name}")
-                if r.track_change_callback:
-                    try:
-                        r.track_change_callback(
-                            r.channel_id, r.channel_name, "joined",
-                            guild_id=r.guild_id, guild_name=r.guild_name,
-                        )
-                    except Exception as e:
-                        log.warning(f"track_change_callback 异常: {e}")
-                asyncio.create_task(self._broadcast_event({
-                    "type": "event", "event_type": "track",
-                    "data": {
-                        "channel_id": r.channel_id,
-                        "channel_name": r.channel_name,
-                        "action": "joined",
-                        "guild_id": r.guild_id,
-                        "guild_name": r.guild_name,
-                        "user_id": user_id,
-                    },
-                }))
+                if channel_name and channel_name != r.channel_id:
+                    log.info(f"✅ 频道名称补全 user={user_id}: {channel_name}")
+                    if r.track_change_callback:
+                        try:
+                            r.track_change_callback(
+                                r.channel_id, r.channel_name, "joined",
+                                guild_id=r.guild_id, guild_name=r.guild_name,
+                            )
+                        except Exception as e:
+                            log.warning(f"track_change_callback 异常: {e}")
+                    if first:
+                        asyncio.create_task(self._broadcast_event({
+                            "type": "event", "event_type": "track",
+                            "data": {
+                                "channel_id": r.channel_id,
+                                "channel_name": r.channel_name,
+                                "action": "joined",
+                                "guild_id": r.guild_id,
+                                "guild_name": r.guild_name,
+                                "user_id": user_id,
+                            },
+                        }))
+                        first = False
         except Exception as e:
             log.warning(f"查询频道/服务器名称失败 user={user_id}: {e}")
 
@@ -699,8 +727,9 @@ class KookGateway:
         # ── 1) 某个注册用户加入/退出 → 只切该用户的路由 ───────────
         is_self = user_id in self._registered_user_ids
         if is_self:
-            route = self._user_routes.get(user_id)
-            if route and route.track_own_join:
+            routes = self._user_routes.get(str(user_id), [])
+            has_track_own = any(r.track_own_join for r in routes)
+            if has_track_own:
                 if extra_type == "joined_channel":
                     self.switch_channel(
                         new_channel_id=channel_id,
@@ -718,27 +747,29 @@ class KookGateway:
                                  "user_id": user_id},
                     }))
                 elif extra_type in ("exited_channel", "left_channel"):
-                    log.info(f"🔓 用户 {user_id} 退出频道: {route.channel_id}")
-                    if route.track_change_callback:
-                        try:
-                            route.track_change_callback(
-                                channel_id, "", "exited",
-                                guild_id=guild_id, guild_name=route.guild_name,
-                            )
-                        except Exception as e:
-                            log.warning(f"track_change_callback 异常: {e}")
-                    old_ch = route.channel_id
-                    route.channel_id = ""
-                    route.channel_name = ""
-                    route.guild_id = ""
-                    route.guild_name = ""
-                    if old_ch and old_ch in self._routes:
-                        self._routes[old_ch] = [
-                            r for r in self._routes[old_ch]
-                            if r.user_id != user_id
-                        ]
-                        if not self._routes[old_ch]:
-                            self._routes.pop(old_ch, None)
+                    log.info(f"🔓 用户 {user_id} 退出频道")
+                    # 遍历同 user_id 下所有 route，本地回调 + 清理
+                    for route in routes:
+                        if route.track_change_callback:
+                            try:
+                                route.track_change_callback(
+                                    channel_id, "", "exited",
+                                    guild_id=guild_id, guild_name=route.guild_name,
+                                )
+                            except Exception as e:
+                                log.warning(f"track_change_callback 异常: {e}")
+                        old_ch = route.channel_id
+                        route.channel_id = ""
+                        route.channel_name = ""
+                        route.guild_id = ""
+                        route.guild_name = ""
+                        if old_ch and old_ch in self._routes:
+                            self._routes[old_ch] = [
+                                r for r in self._routes[old_ch]
+                                if r.client_id != route.client_id
+                            ]
+                            if not self._routes[old_ch]:
+                                self._routes.pop(old_ch, None)
                     asyncio.create_task(self._broadcast_event({
                         "type": "event", "event_type": "track",
                         "data": {"channel_id": channel_id, "channel_name": "",
@@ -746,9 +777,6 @@ class KookGateway:
                                  "user_id": user_id},
                     }))
                 return
-            # route 不存在或非 track_own_join：不拦截，继续往下走
-            # （可能是边界场景，让事件按频道桶正常派发）
-            pass
 
         # ── 2) 他人事件 → 按 channel_id 桶派发给所有关心该频道的路由 ─
         routes = self._routes.get(channel_id, [])
