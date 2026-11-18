@@ -110,10 +110,11 @@ class GatewayServer:
                     return
 
             elif event_type in ("voice", "message"):
-                # voice / message 事件只发给当前监听该 channel 的 client
                 ev_ch = str(data.get("channel_id", ""))
                 my_ch = self.client_channels.get(client_id, "")
-                if ev_ch and my_ch and ev_ch != my_ch:
+                if not my_ch:
+                    return
+                if ev_ch and ev_ch != my_ch:
                     return
 
             await ws.send(json.dumps(event_dict, ensure_ascii=False, default=str))
