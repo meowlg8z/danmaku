@@ -719,6 +719,11 @@ class KookGateway:
         if not channel_id or not user_id:
             return
         if extra_type not in ("joined_channel", "exited_channel", "left_channel"):
+            log.warning(
+                f"⚠️ 未知 voice extra.type='{extra_type}' "
+                f"channel_id='{channel_id}' user_id='{user_id}' "
+                f"完整 extra={extra}"
+            )
             return
 
         action_label = "来了" if extra_type == "joined_channel" else "走了"
@@ -778,21 +783,19 @@ class KookGateway:
                     }))
                 return
 
-        # ── 2) 他人事件 → 按 channel_id 桶派发给所有关心该频道的路由 ─
+        # ── 2) 他人事件 → 本地派发 + 远程广播 ────────────────────
         routes = self._routes.get(channel_id, [])
         log.info(
             f"🔔 voice事件: channel_id='{channel_id}' user_id='{user_id}' "
             f"extra_type='{extra_type}' is_self={is_self} "
             f"_routes.keys={list(self._routes.keys())} routes_count={len(routes)}"
         )
-        if not routes:
-            return
 
         nickname = await self._fetch_user_nickname(user_id)
-
         msg = f"{nickname} {action_label}"
         log.info(msg)
 
+        # 本地派发（只有 _routes 里有该频道的 route 才做）
         for route in routes:
             if route.q:
                 route.q.put(msg)
@@ -811,7 +814,7 @@ class KookGateway:
                 except Exception as e:
                     log.warning(f"voice_event_callback 异常: {e}")
 
-        # 广播给远程 Client
+        # 远程广播始终发（过滤由 server.py 的 client_channels 做）
         asyncio.create_task(self._broadcast_event({
             "type": "event",
             "event_type": "voice",
@@ -821,7 +824,6 @@ class KookGateway:
                 "user_id": user_id,
                 "nickname": nickname,
                 "channel_id": channel_id,
-                "channel_name": route.channel_name or channel_id,
                 "guild_id": guild_id,
             },
         }))
@@ -831,10 +833,7 @@ class KookGateway:
     # ------------------------------------------------------------------
     async def _handle_message_event(self, event, event_type):
         target = str(event.get("target_id"))
-        # 按 channel_id 桶找到所有路由，逐个派发
         routes = self._routes.get(target, [])
-        if not routes:
-            return
 
         author = event.get("extra", {}).get("author", {})
         name = (
@@ -856,18 +855,18 @@ class KookGateway:
             msg = f"{name} 发了一条{type_label}消息"
             log.info(f"收到{type_label}消息: user={name}")
 
+        # 本地派发
         for route in routes:
             if route.q:
                 route.q.put(msg)
 
-        # 广播给远程 Client
+        # 远程广播始终发（过滤由 server.py 的 client_channels 做）
         asyncio.create_task(self._broadcast_event({
             "type": "event",
             "event_type": "message",
             "data": {
                 "msg": msg,
                 "channel_id": target,
-                "channel_name": routes[0].channel_name if routes else target,
                 "author": name,
                 "content": content,
                 "type_label": type_label,
@@ -905,8 +904,9 @@ class KookGateway:
             if extra_type in ("joined_channel", "exited_channel", "left_channel"):
                 await self._handle_voice_event(event)
             else:
-                log.info(
-                    f"系统通知事件: extra.type={extra_type}"
+                log.warning(
+                    f"⚠️ 系统通知但非语音进出: extra.type='{extra_type}' "
+                    f"完整事件={json.dumps(event, ensure_ascii=False)[:300]}"
                 )
             return
 
