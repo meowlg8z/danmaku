@@ -114,8 +114,13 @@ class GatewayServer:
 
             elif event_type in ("voice", "message"):
                 ev_ch = str(data.get("channel_id", ""))
+                ev_user_id = str(data.get("user_id", ""))
                 my_ch = self.client_channels.get(client_id, "")
+                my_user_id = self.client_users.get(client_id, "")
                 is_track_own = self.client_track_own.get(client_id, False)
+
+                if ev_user_id and my_user_id and ev_user_id == my_user_id:
+                    return
 
                 if my_ch:
                     if ev_ch and ev_ch != my_ch:

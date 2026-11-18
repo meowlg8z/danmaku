@@ -794,8 +794,11 @@ class KookGateway:
         msg = f"{nickname} {action_label}"
         log.info(msg)
 
-        # 本地派发
+        # 本地派发：跳过"自己"的事件（同一 user_id 不需要给自己显示"我来了/我走了"）
         for route in routes:
+            if route.user_id and route.user_id == user_id:
+                continue
+
             if route.q:
                 route.q.put(msg)
 
