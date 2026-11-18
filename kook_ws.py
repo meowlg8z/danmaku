@@ -534,27 +534,15 @@ class KookGateway:
                 import requests
                 if guild_id:
                     r = requests.get(
-                        "https://www.kookapp.cn/api/v3/guild/user-profile",
+                        "https://www.kookapp.cn/api/v3/user/view",
                         headers={"Authorization": f"Bot {self.token}"},
                         params={"guild_id": guild_id, "user_id": user_id},
                         timeout=5,
                     )
                     data = r.json()
                     if data.get("code") == 0:
-                        profile = data.get("data", {})
-                        nick = profile.get("nickname") or ""
-                        if nick:
-                            return nick
-                r = requests.get(
-                    "https://www.kookapp.cn/api/v3/user/view",
-                    headers={"Authorization": f"Bot {self.token}"},
-                    params={"user_id": user_id},
-                    timeout=5,
-                )
-                data = r.json()
-                if data.get("code") == 0:
-                    user = data.get("data", {})
-                    return user.get("nickname") or user.get("username") or None
+                        user = data.get("data", {})
+                        return user.get("nickname") or user.get("username") or None
             except Exception as e:
                 log.warning(f"获取用户信息异常 user_id={user_id}: {e}")
             return None
