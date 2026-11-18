@@ -96,7 +96,6 @@ class GatewayServer:
             event_type = event_dict.get("event_type", "")
             data = event_dict.get("data", {})
 
-            # track 事件：同步更新 server 端 client_channels（所有同 user_id 的 client）
             if event_type == "track":
                 ev_user_id = str(data.get("user_id", ""))
                 ev_ch = str(data.get("channel_id", ""))
@@ -106,10 +105,10 @@ class GatewayServer:
                             self.client_channels[cid] = ev_ch
                         else:
                             self.client_channels.pop(cid, None)
-
-                # 只发给 data.user_id 匹配的 client
                 my_user_id = self.client_users.get(client_id, "")
+                log.info(f"[FILTER track] cid={client_id} my_user={my_user_id} ev_user={ev_user_id} ev_ch={ev_ch} my_channels={self.client_channels}")
                 if ev_user_id and my_user_id and ev_user_id != my_user_id:
+                    log.info(f"  → BLOCKED: user_id 不匹配")
                     return
 
             elif event_type in ("voice", "message"):
@@ -118,20 +117,25 @@ class GatewayServer:
                 my_ch = self.client_channels.get(client_id, "")
                 my_user_id = self.client_users.get(client_id, "")
                 is_track_own = self.client_track_own.get(client_id, False)
+                log.info(f"[FILTER {event_type}] cid={client_id} my_user={my_user_id} ev_user={ev_user_id} my_ch={my_ch} ev_ch={ev_ch} track_own={is_track_own}")
 
                 if ev_user_id and my_user_id and ev_user_id == my_user_id:
+                    log.info(f"  → BLOCKED: 自己的事件")
                     return
 
                 if my_ch:
                     if ev_ch and ev_ch != my_ch:
+                        log.info(f"  → BLOCKED: 频道不匹配")
                         return
                 else:
                     if not is_track_own:
+                        log.info(f"  → BLOCKED: 无频道+非track_own")
                         return
 
+            log.info(f"  → PASS -> 发给 client {client_id}")
             await ws.send(json.dumps(event_dict, ensure_ascii=False, default=str))
-        except Exception:
-            pass
+        except Exception as e:
+            log.warning(f"_push_to_client 异常: {e}")
 
     async def _handle_client_cmd(self, client_id: str, ws: ServerConnection, req: dict):
         cmd_type = req.get("type")
