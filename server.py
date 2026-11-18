@@ -211,16 +211,24 @@ class GatewayServer:
         """websockets 17.x process_request: (ServerConnection, Request) -> Response | None"""
         from websockets.http11 import Response, Headers
 
-        path = getattr(request, "path", "/")
-        if path in ("/healthz", "/health", "/"):
-            body = b'{"status":"ok","service":"kook-gateway"}'
-            headers = Headers([
-                (b"Content-Type", b"application/json"),
-                (b"Content-Length", str(len(body)).encode()),
-                (b"Access-Control-Allow-Origin", b"*"),
-            ])
-            return Response(200, "OK", headers, body)
-        return None
+        headers = getattr(request, "headers", [])
+        upgrade_val = None
+        try:
+            hd = dict(headers)
+            upgrade_val = hd.get("upgrade") or hd.get(b"upgrade") or hd.get("Upgrade") or hd.get(b"Upgrade")
+        except Exception:
+            pass
+
+        if upgrade_val and b"websocket" in str(upgrade_val).lower().encode():
+            return None
+
+        body = b'{"status":"ok","service":"kook-gateway"}'
+        resp_headers = Headers([
+            (b"Content-Type", b"application/json"),
+            (b"Content-Length", str(len(body)).encode()),
+            (b"Access-Control-Allow-Origin", b"*"),
+        ])
+        return Response(200, "OK", resp_headers, body)
 
     # ------------------------------------------------------------------
     # 主入口
