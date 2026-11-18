@@ -125,6 +125,13 @@ class GatewayServer:
                 if ev_ch and ev_ch != my_ch:
                     return
 
+            if event_type == "voice":
+                log.info(f"🎤 转发语音弹幕 → client={client_id} msg={data.get('msg','')}")
+            elif event_type == "message":
+                log.info(f"💬 转发文字弹幕 → client={client_id} msg={data.get('msg','')}")
+            elif event_type == "track":
+                log.info(f"📍 转发track事件 → client={client_id} user={data.get('user_id','')} action={data.get('action','')} ch={data.get('channel_id','')}")
+
             await ws.send(json.dumps(event_dict, ensure_ascii=False, default=str))
         except Exception as e:
             log.warning(f"_push_to_client 异常: {e}")
