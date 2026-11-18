@@ -725,6 +725,7 @@ class KookGateway:
         extra = event.get("extra", {})
         extra_type = extra.get("type", "")
         body = extra.get("body", {})
+        log.info(f"▶ [voice入口] extra_type='{extra_type}' body_keys={list(body.keys())} target_id={event.get('target_id')}")
 
         channel_id = str(body.get("channel_id", ""))
         user_id = str(body.get("user_id", ""))
@@ -804,7 +805,11 @@ class KookGateway:
             f"_routes.keys={list(self._routes.keys())} routes_count={len(routes)}"
         )
 
-        nickname = await self._fetch_user_nickname(user_id, guild_id)
+        try:
+            nickname = await self._fetch_user_nickname(user_id, guild_id)
+        except Exception as e:
+            log.warning(f"_fetch_user_nickname 异常 user={user_id}: {e}")
+            nickname = user_id
         msg = f"{nickname} {action_label}"
         log.info(msg)
 
